@@ -21,12 +21,12 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Starting up — running ETL pipeline …")
+    logger.info(" Starting up — running ETL pipeline …")
     pipeline = ETLPipeline()
     app.state.df = pipeline.run()
-    logger.info(f"✅ ETL complete — {len(app.state.df):,} clean records in memory.")
+    logger.info(f" ETL complete — {len(app.state.df):,} clean records in memory.")
     yield
-    logger.info("🛑 Shutting down.")
+    logger.info("Shutting down.")
 
 
 # ---------------------------------------------------------------------------
