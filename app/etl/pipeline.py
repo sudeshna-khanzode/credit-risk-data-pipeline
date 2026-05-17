@@ -48,7 +48,7 @@ class ETLPipeline:
         final_df = load(clean_df)
 
         elapsed = time.perf_counter() - t_start
-        logger.info(f"✅ Pipeline finished in {elapsed:.2f}s — {len(final_df):,} records ready.")
+        logger.info(f" Pipeline finished in {elapsed:.2f}s — {len(final_df):,} records ready.")
         logger.info("=" * 55)
 
         return final_df
