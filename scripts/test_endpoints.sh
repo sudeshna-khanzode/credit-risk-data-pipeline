@@ -15,10 +15,10 @@ check() {
     local result
     result=$(curl -s -o /dev/null -w "%{http_code}" "$url")
     if [ "$result" -eq "$expected_status" ]; then
-        echo "  ✅  $desc ($result)"
+        echo "  $desc ($result)"
         ((PASS++))
     else
-        echo "  ❌  $desc — expected $expected_status, got $result"
+        echo "  $desc — expected $expected_status, got $result"
         ((FAIL++))
     fi
 }
