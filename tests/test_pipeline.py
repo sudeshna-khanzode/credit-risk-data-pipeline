@@ -9,17 +9,34 @@ import pytest
 import pandas as pd
 import numpy as np
 from unittest.mock import patch
+from contextlib import asynccontextmanager
+
+# httpx is required by fastapi.testclient.TestClient. If it's missing, fail
+# loudly and visibly via pytest's own skip-reporting rather than swallowing
+# the ImportError — a hidden `except ImportError: pass` here previously
+# caused all 15 API tests to vanish without a trace whenever an unrelated
+# import (e.g. a moved module) broke. Don't reintroduce that pattern.
+pytest.importorskip("httpx", reason="httpx is required for FastAPI TestClient")
+
+from fastapi.testclient import TestClient
 
 from app.etl.transformer import transform, _normalise_columns, _engineer_features
 from app.etl.loader import load
+from app.main import create_app
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
-@pytest.fixture
+@pytest.fixture(scope="module")
 def raw_sample() -> pd.DataFrame:
-    """Minimal raw DataFrame mimicking the HuggingFace dataset schema."""
+    """Minimal raw DataFrame mimicking the HuggingFace dataset schema.
+
+    Module-scoped (not function-scoped) because it's deterministic (fixed
+    RNG seed, no external I/O) and the module-scoped `client` fixture below
+    depends on it — pytest raises a ScopeMismatch error if a module-scoped
+    fixture tries to depend on a function-scoped one.
+    """
     n = 50
     rng = np.random.default_rng(0)
     return pd.DataFrame({
@@ -122,87 +139,83 @@ class TestLoader:
 # ─────────────────────────────────────────────────────────────────────────────
 # API endpoint tests (using FastAPI TestClient)
 # ─────────────────────────────────────────────────────────────────────────────
-try:
-    from fastapi.testclient import TestClient
-    from app.main import create_app
+@pytest.fixture(scope="module")
+def client(raw_sample):
+    """TestClient with pre-loaded synthetic data — no network call."""
+    transformed = transform(raw_sample)
+    _app = create_app()
 
-    @pytest.fixture(scope="module")
-    def client(raw_sample):
-        """TestClient with pre-loaded synthetic data — no network call."""
-        transformed = transform(raw_sample)
-        _app = create_app()
+    # Override lifespan: inject data directly
+    @asynccontextmanager
+    async def _mock_lifespan(app):
+        app.state.df = transformed
+        yield
 
-        # Override lifespan: inject data directly
-        from contextlib import asynccontextmanager
+    _app.router.lifespan_context = _mock_lifespan
+    with TestClient(_app) as test_client:
+        yield test_client
 
-        @asynccontextmanager
-        async def _mock_lifespan(app):
-            app.state.df = transformed
-            yield
 
-        _app.router.lifespan_context = _mock_lifespan
-        return TestClient(_app)
+class TestHealthEndpoint:
+    def test_health_200(self, client):
+        r = client.get("/api/v1/health")
+        assert r.status_code == 200
 
-    class TestHealthEndpoint:
-        def test_health_200(self, client):
-            r = client.get("/api/v1/health")
-            assert r.status_code == 200
+    def test_health_has_status(self, client):
+        body = client.get("/api/v1/health").json()
+        assert body["status"] == "ok"
 
-        def test_health_has_status(self, client):
-            body = client.get("/api/v1/health").json()
-            assert body["status"] == "ok"
+    def test_health_records_loaded(self, client):
+        body = client.get("/api/v1/health").json()
+        assert body["records_loaded"] > 0
 
-        def test_health_records_loaded(self, client):
-            body = client.get("/api/v1/health").json()
-            assert body["records_loaded"] > 0
 
-    class TestSummaryEndpoint:
-        def test_summary_200(self, client):
-            assert client.get("/api/v1/summary").status_code == 200
+class TestSummaryEndpoint:
+    def test_summary_200(self, client):
+        assert client.get("/api/v1/summary").status_code == 200
 
-        def test_summary_has_dataset_meta(self, client):
-            body = client.get("/api/v1/summary").json()
-            assert "dataset" in body
-            assert "columns" in body
+    def test_summary_has_dataset_meta(self, client):
+        body = client.get("/api/v1/summary").json()
+        assert "dataset" in body
+        assert "columns" in body
 
-        def test_summary_default_rate_in_range(self, client):
-            meta = client.get("/api/v1/summary").json()["dataset"]
-            assert 0 <= meta["default_rate_pct"] <= 100
+    def test_summary_default_rate_in_range(self, client):
+        meta = client.get("/api/v1/summary").json()["dataset"]
+        assert 0 <= meta["default_rate_pct"] <= 100
 
-    class TestRecordsEndpoint:
-        def test_records_200(self, client):
-            assert client.get("/api/v1/records").status_code == 200
 
-        def test_records_pagination(self, client):
-            body = client.get("/api/v1/records?page=1&page_size=10").json()
-            assert len(body["results"]) <= 10
-            assert "total_records" in body
-            assert "total_pages" in body
+class TestRecordsEndpoint:
+    def test_records_200(self, client):
+        assert client.get("/api/v1/records").status_code == 200
 
-        def test_records_filter_risk(self, client):
-            body = client.get("/api/v1/records?risk_tier=High").json()
-            for rec in body["results"]:
-                assert rec["risk_tier"] == "High"
+    def test_records_pagination(self, client):
+        body = client.get("/api/v1/records?page=1&page_size=10").json()
+        assert len(body["results"]) <= 10
+        assert "total_records" in body
+        assert "total_pages" in body
 
-        def test_single_record(self, client):
-            r = client.get("/api/v1/records/1")
-            assert r.status_code == 200
-            assert r.json()["record_id"] == 1
+    def test_records_filter_risk(self, client):
+        body = client.get("/api/v1/records?risk_tier=High").json()
+        for rec in body["results"]:
+            assert rec["risk_tier"] == "High"
 
-        def test_record_not_found(self, client):
-            assert client.get("/api/v1/records/99999").status_code == 404
+    def test_single_record(self, client):
+        r = client.get("/api/v1/records/1")
+        assert r.status_code == 200
+        assert r.json()["record_id"] == 1
 
-    class TestInsightsEndpoint:
-        def test_insights_200(self, client):
-            assert client.get("/api/v1/insights").status_code == 200
+    def test_record_not_found(self, client):
+        assert client.get("/api/v1/records/99999").status_code == 404
 
-        def test_insights_structure(self, client):
-            body = client.get("/api/v1/insights").json()
-            assert "by_risk_tier" in body
-            assert "by_education" in body
-            assert "by_age_group" in body
-            assert "key_findings" in body
-            assert len(body["key_findings"]) > 0
 
-except ImportError:
-    pass  # httpx not installed — API tests skipped
+class TestInsightsEndpoint:
+    def test_insights_200(self, client):
+        assert client.get("/api/v1/insights").status_code == 200
+
+    def test_insights_structure(self, client):
+        body = client.get("/api/v1/insights").json()
+        assert "by_risk_tier" in body
+        assert "by_education" in body
+        assert "by_age_group" in body
+        assert "key_findings" in body
+        assert len(body["key_findings"]) > 0

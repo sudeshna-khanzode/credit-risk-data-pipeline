@@ -11,8 +11,13 @@ services:
       - "8000:8000"
     environment:
       LOG_LEVEL: INFO
+      DB_PATH: /app/data/credit_risk.db
       # Override the HuggingFace URL if needed:
       # HF_DATASET_URL: https://huggingface.co/datasets/imodels/credit-card/raw/main/train.csv
+    volumes:
+      # Persist the SQLite file the LOAD step writes on every startup so
+      # data survives `docker compose down` / container restarts.
+      - ./data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -22,7 +27,8 @@ services:
       retries: 3
       start_period: 60s
 
-# Optional: add a Postgres service here if you extend the loader to persist data
+# Scaling beyond a single demo instance would mean swapping SQLite for a
+# real server-based database, e.g.:
 # postgres:
 #   image: postgres:15-alpine
 #   environment:

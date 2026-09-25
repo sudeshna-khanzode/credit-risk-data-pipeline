@@ -4,7 +4,7 @@ app/core/config.py
 Centralised settings — override any value via environment variables.
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -27,12 +27,14 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 50
     MAX_PAGE_SIZE:     int = 500
 
+    # Persistence — SQLite file the LOAD step writes to. Mounted as a volume
+    # in docker-compose.yml so it survives container restarts.
+    DB_PATH: str = "data/credit_risk.db"
+
     # Logging
     LOG_LEVEL: str = "INFO"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 
 settings = Settings()

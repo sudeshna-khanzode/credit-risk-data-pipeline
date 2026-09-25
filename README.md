@@ -1,293 +1,127 @@
-# etl-api-demo
+# Credit Risk Data Pipeline
 
-> **A production-style FastAPI + ETL pipeline** that extracts the Credit Card Default dataset from Hugging Face, runs a 7-step transformation pipeline, and serves enriched data through a versioned, Dockerised REST API.
+An ETL pipeline and REST API built around the UCI Credit Card Default dataset — from raw data ingestion to a queryable API.
 
----
+## Overview
 
-## Why this project exists
+I wanted to build a complete, end-to-end data pipeline: something that starts with a real dataset and ends with a usable API, not just a notebook that stops at a chart. This project takes raw credit card customer data, runs it through cleaning and feature engineering, persists the result, and serves it through a REST API with filtering, pagination, and basic analytics.
 
-This project directly demonstrates the skills listed on my resume:
-
-| Resume claim | Where it's proven in this repo |
-|---|---|
-| FastAPI development | `app/main.py`, `app/api/v1/` — 4 endpoints with Pydantic validation |
-| ETL pipeline development | `app/etl/` — modular Extract → Transform → Load with 7 named steps |
-| Data transformation with Pandas | `app/etl/transformer.py` — type casting, imputation, outlier capping, feature engineering |
-| Docker / containerisation | `Dockerfile` (multi-stage), `docker-compose.yml` |
-| Python project structure | Layered package design with `core/`, `etl/`, `api/`, `schemas/` |
-| Unit testing | `tests/test_pipeline.py` — 20 test cases covering ETL + API endpoints |
-| Public dataset ingestion | Live fetch from HuggingFace Hub with graceful fallback |
-
----
-
-## Dataset
-
-| Property | Detail |
-|---|---|
-| **Source** | [`imodels/credit-card`](https://huggingface.co/datasets/imodels/credit-card) on Hugging Face |
-| **Original** | UCI ML Repository — Default of Credit Card Clients |
-| **Records** | ~24,000 training records |
-| **Target** | `default.payment.next.month` (binary: will customer default?) |
-| **Key features** | Credit limit, age, sex, education, 6-month payment history & billing amounts |
-
-The app fetches the dataset **directly at startup** with no manual download needed:
-```python
-pd.read_csv("https://huggingface.co/datasets/imodels/credit-card/raw/main/train.csv")
-```
-
----
+It's deliberately scoped as a single, focused project rather than trying to cover every tool at once — SQL warehousing, dashboards, and cloud deployment are things I'm building out as separate projects.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                      FastAPI App                             │
-│                                                              │
-│  Startup (lifespan)                                          │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              ETL Pipeline                            │   │
-│  │                                                      │   │
-│  │  EXTRACT          TRANSFORM              LOAD        │   │
-│  │  ────────         ──────────────────     ────────    │   │
-│  │  HuggingFace  →   [T1] Normalise cols →  Validate   │   │
-│  │  HTTP fetch       [T2] Cast types        Log stats   │   │
-│  │  (+ fallback)     [T3] Impute nulls      Return df   │   │
-│  │                   [T4] Cap outliers                  │   │
-│  │                   [T5] Encode labels                 │   │
-│  │                   [T6] Engineer features             │   │
-│  │                   [T7] Validate schema               │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                         │                                    │
-│              app.state.df (in-memory)                        │
-│                         │                                    │
-│  ┌──────────────────────┼───────────────────────────────┐   │
-│  │          REST Endpoints                              │   │
-│  │  GET /api/v1/health                                  │   │
-│  │  GET /api/v1/summary                                 │   │
-│  │  GET /api/v1/records      (paginated + filtered)     │   │
-│  │  GET /api/v1/records/{id}                            │   │
-│  │  GET /api/v1/insights     (aggregated analytics)     │   │
-│  └──────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────┘
+UCI Credit Card Dataset
+        │
+        ▼
+     Extract
+        │
+        ▼
+Clean + Transform
+        │
+        ▼
+Feature Engineering
+        │
+        ▼
+      SQLite
+        │
+        ▼
+     FastAPI
 ```
 
----
+Extraction pulls the dataset from HuggingFace; if that fails, the pipeline falls back to generated synthetic data with the same schema so the app doesn't just crash on a network hiccup. Everything downstream — cleaning, feature engineering, persistence, and the API — behaves identically either way.
 
-## Quickstart
+## Dataset
 
-### Option A — Docker (recommended)
+The [UCI Credit Card Default dataset](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients) (accessed via a HuggingFace mirror) contains 30,000 records of Taiwanese credit card customers from 2005: credit limits, demographics, six months of billing and payment history, and whether each customer defaulted the following month. It's a standard, well-understood dataset for this kind of exercise — clean enough to focus on pipeline design rather than data archaeology.
+
+## Features
+
+- ETL pipeline with 7 named transformation steps
+- Schema validation after transformation
+- Engineered risk features (see below)
+- SQLite persistence
+- REST API with 4 endpoints
+- Pagination and filtering on the records endpoint
+- 26 tests covering the ETL logic and the API
+- Dockerised, with a non-root user and a healthcheck
+- CI workflow that runs the tests and builds the image on every push
+
+## Engineered Features
+
+The raw dataset gives you six months of bill and payment amounts per customer. The interesting part of this project was turning that into signals that actually mean something:
+
+- **`credit_utilisation`** — average bill amount ÷ credit limit. How much of their credit line a customer is actually using.
+- **`avg_payment_ratio`** — average payment ÷ bill amount each month. A rough measure of repayment discipline.
+- **`payment_gap`** — total billed minus total paid over six months. Net exposure.
+- **`repayment_trend`** — whether a customer's payments trended up or down over the period.
+- **`max_late_payments`** — worst delinquency status recorded across the six months.
+- **`risk_tier`** — a simple rule-based bucket (Low / Medium / High) combining utilisation and late-payment history.
+
+None of this is a trained model — it's feature engineering meant to turn raw transaction history into something a downstream model or analyst could actually use.
+
+## Tech Stack
+
+Python · Pandas · FastAPI · Pydantic · SQLite · Pytest · Docker
+
+## Running Locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/etl-api-demo.git
-cd etl-api-demo
-
-docker compose up --build
-```
-
-The API will be live at **http://localhost:8000**
-
-- Swagger UI: http://localhost:8000/docs
-- ReDoc:       http://localhost:8000/redoc
-
-### Option B — Local Python
-
-```bash
-git clone https://github.com/YOUR_USERNAME/etl-api-demo.git
-cd etl-api-demo
-
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+git clone https://github.com/sudeshna-khanzode/credit-risk-data-pipeline.git
+cd credit-risk-data-pipeline
 pip install -r requirements.txt
-
 cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
----
+Then open `http://localhost:8000/docs` for the interactive API docs.
 
-## API Endpoints
-
-### `GET /api/v1/health`
-Liveness check. Confirms the ETL pipeline completed and records are loaded.
-```json
-{
-  "status": "ok",
-  "version": "1.0.0",
-  "records_loaded": 24000
-}
-```
-
----
-
-### `GET /api/v1/summary`
-Full dataset metadata + column catalogue after transformation.
-```json
-{
-  "dataset": {
-    "source": "imodels/credit-card",
-    "total_records": 24000,
-    "columns": 37,
-    "default_rate_pct": 22.1,
-    "avg_credit_limit": 167484.32,
-    "avg_age": 35.5,
-    "risk_tier_distribution": {"High": 8200, "Medium": 9100, "Low": 5400, "Very Low": 1300}
-  },
-  "columns": [
-    {"name": "credit_utilisation", "dtype": "float64", "null_count": 0, "sample_values": [0.42, 0.87, 0.13]}
-  ]
-}
-```
-
----
-
-### `GET /api/v1/records`
-Paginated record list with optional filters.
-
-**Query params:**
-
-| Param | Type | Description |
-|---|---|---|
-| `page` | int | Page number (default: 1) |
-| `page_size` | int | Records per page (max: 500, default: 50) |
-| `risk_tier` | str | `Very Low` \| `Low` \| `Medium` \| `High` |
-| `default_flag` | int | `0` or `1` |
-| `min_age` | int | Minimum age filter |
-| `max_age` | int | Maximum age filter |
+Or with Docker:
 
 ```bash
-curl "http://localhost:8000/api/v1/records?risk_tier=High&default_flag=1&page=1&page_size=5"
+docker compose up --build
 ```
 
----
-
-### `GET /api/v1/records/{record_id}`
-Single record with all 37 transformed fields.
-```json
-{
-  "record_id": 42,
-  "limit_bal": 200000,
-  "sex_label": "Female",
-  "education_label": "University",
-  "marriage_label": "Single",
-  "age": 28,
-  "default_flag": 0,
-  "credit_utilisation": 0.4312,
-  "avg_payment_ratio": 0.7821,
-  "total_bill_6m": 86240.5,
-  "total_paid_6m": 67400.0,
-  "payment_gap": 18840.5,
-  "repayment_trend": 1250.0,
-  "max_late_payments": 0,
-  "risk_tier": "Low"
-}
-```
-
----
-
-### `GET /api/v1/insights`
-Pre-computed analytical aggregations — default rates, utilisation, credit limits broken down by risk tier, education level, and age group.
-```json
-{
-  "by_risk_tier": [
-    {"risk_tier": "High", "count": 8200, "pct_of_total": 34.2, "default_rate_pct": 38.1, ...}
-  ],
-  "by_education": [...],
-  "by_age_group": [...],
-  "key_findings": [
-    "Overall default rate: 22.1% across 24,000 records.",
-    "High-risk customers default at 38.1% — 1.7× the average.",
-    ...
-  ]
-}
-```
-
----
-
-## Project Structure
-
-```
-etl-api-demo/
-│
-├── app/
-│   ├── main.py                  # FastAPI app factory + lifespan (ETL trigger)
-│   │
-│   ├── core/
-│   │   ├── config.py            # Pydantic settings (env-var overrideable)
-│   │   ├── logger.py            # Structured logging
-│   │   └── exceptions.py        # Custom exception types
-│   │
-│   ├── etl/
-│   │   ├── extractor.py         # EXTRACT — HuggingFace HTTP fetch + fallback
-│   │   ├── transformer.py       # TRANSFORM — 7-step cleaning & feature engineering
-│   │   ├── loader.py            # LOAD — validation, stats logging
-│   │   └── pipeline.py          # Orchestrator: runs E → T → L in sequence
-│   │
-│   ├── api/v1/
-│   │   ├── health.py            # GET /api/v1/health
-│   │   ├── summary.py           # GET /api/v1/summary
-│   │   ├── records.py           # GET /api/v1/records, /records/{id}
-│   │   └── insights.py          # GET /api/v1/insights
-│   │
-│   └── schemas/
-│       └── responses.py         # Pydantic v2 response models
-│
-├── tests/
-│   └── test_pipeline.py         # 20 unit + integration tests
-│
-├── Dockerfile                   # Multi-stage build
-├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-├── .gitignore
-└── README.md
-```
-
----
-
-## Running Tests
+Run the tests:
 
 ```bash
 pytest tests/ -v
 ```
 
-The test suite covers:
-- Column normalisation and type casting
-- Null imputation
-- Engineered feature value ranges (`credit_utilisation` ∈ [0,1], etc.)
-- Label encoding correctness
-- `record_id` uniqueness and start value
-- Schema validation (post-transform)
-- All 4 API endpoints (health, summary, records, insights)
-- Pagination, filtering, and 404 handling
+## API
 
----
-
-## ETL Transformations — Detail
-
-| Step | What happens |
+| Endpoint | What it does |
 |---|---|
-| **T1 Normalise** | Lowercase + snake_case columns; rename `default.payment.next.month` → `default_flag` |
-| **T2 Cast types** | Enforce `Int64` for categoricals, `float64` for amounts |
-| **T3 Impute** | Median for numeric nulls; mode for categorical nulls |
-| **T4 Outlier cap** | IQR × 3 bounds applied to `LIMIT_BAL` |
-| **T5 Encode** | `sex` → `"Male"/"Female"`, `education` → `"University"` etc. |
-| **T6 Engineer** | `credit_utilisation`, `avg_payment_ratio`, `total_bill_6m`, `total_paid_6m`, `payment_gap`, `repayment_trend`, `max_late_payments`, `risk_tier` |
-| **T7 Validate** | Assert required columns exist; raise `ETLError` otherwise |
+| `GET /api/v1/health` | Basic health check, including record count loaded |
+| `GET /api/v1/summary` | Dataset-level stats — default rate, column info |
+| `GET /api/v1/records` | Paginated, filterable list of records (e.g. `?risk_tier=High`) |
+| `GET /api/v1/records/{id}` | A single record by ID |
+| `GET /api/v1/insights` | Aggregated breakdowns by risk tier, education, and age group |
 
----
+Full request/response schemas are in the Swagger docs at `/docs` once running.
 
-## Tech Stack
+## Engineering Decisions
 
-![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi&logoColor=white)
-![Pandas](https://img.shields.io/badge/Pandas-2.x-150458?logo=pandas&logoColor=white)
-![Pydantic](https://img.shields.io/badge/Pydantic-v2-E92063?logo=pydantic&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-multi--stage-2496ED?logo=docker&logoColor=white)
-![HuggingFace](https://img.shields.io/badge/HuggingFace-Dataset-FFD21E?logo=huggingface&logoColor=black)
-![pytest](https://img.shields.io/badge/pytest-20_tests-0A9EDC?logo=pytest&logoColor=white)
+**Pandas.** The dataset is small enough (30K rows) that Pandas is simple and fast to iterate with. I didn't need distributed processing for this scale, and reaching for Spark here would have added complexity without solving a real problem.
 
----
+**SQLite.** I wanted actual persistence — not just an in-memory dataframe that disappears on restart — without standing up a database server for what's ultimately a single-writer demo. It's mounted as a Docker volume so the data survives a container restart. For multiple concurrent writers or a real production deployment, I'd move this to Postgres.
 
-## Author
+**FastAPI.** Pydantic validation and automatic OpenAPI docs meant I got a documented, typed API without writing separate documentation by hand — useful for a project I want other people to be able to pick up and understand quickly.
 
-**Sudeshna Khanzode** — Data Analyst & Developer  
-[GitHub](https://github.com/sudeshna-khanzode) · [LinkedIn](https://linkedin.com/in/sudeshna-khanzode)
+**What I'd change for production.** Swap SQLite for Postgres, move the ETL off "runs once at container startup" onto a real scheduler, add authentication, and add proper monitoring instead of relying on logs.
+
+## Limitations
+
+This is a demo pipeline, not a production system, and I'd rather be upfront about where the edges are:
+
+- `risk_tier` is a heuristic rule (utilisation + late-payment history), not a validated credit-scoring model. It exists to demonstrate feature engineering, not to predict anything.
+- SQLite handles one writer at a time — fine here, not fine for concurrent production writes.
+- The ETL runs once on startup rather than on a schedule; there's no incremental or streaming ingestion.
+- No authentication — every endpoint is open, which is acceptable for public, de-identified data and a portfolio demo, not for real customer data.
+- No monitoring or alerting beyond application logs.
+
+## What I Learned
+
+- Structuring an ETL pipeline into named, testable stages makes it much easier to reason about where something went wrong than one long script.
+- Tests that pass don't guarantee the app runs — I had a test suite reporting green while the app itself couldn't start, and the only way I caught it was by actually running the server end to end and checking the real output, not just trusting `pytest`.
+- Keeping the API layer and the data/ETL logic separate paid off — I could change how data got persisted without touching a single API route.

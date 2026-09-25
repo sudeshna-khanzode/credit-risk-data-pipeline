@@ -16,3 +16,8 @@ venv/
 .DS_Store
 
 *.log
+
+# SQLite data written by the LOAD step — regenerated on every run, so it
+# shouldn't be committed. Keep the directory itself with .gitkeep.
+data/*.db
+data/*.db-journal

@@ -32,9 +32,15 @@ COPY --from=builder /install /usr/local
 # Copy application source
 COPY app/ ./app/
 
+# Writable directory for the SQLite file the LOAD step persists to
+RUN mkdir -p /app/data
+
 # Non-root user for security
 RUN useradd -m -u 1001 appuser && chown -R appuser /app
 USER appuser
+
+# Persist the SQLite database outside the container's writable layer
+VOLUME ["/app/data"]
 
 # Expose FastAPI default port
 EXPOSE 8000

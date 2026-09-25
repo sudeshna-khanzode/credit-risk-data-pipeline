@@ -14,8 +14,8 @@ from pydantic import BaseModel, Field
 # Health
 # ─────────────────────────────────────────────────────────────────────────────
 class HealthResponse(BaseModel):
-    status: str = Field(..., example="ok")
-    version: str = Field(..., example="1.0.0")
+    status: str = Field(..., json_schema_extra={"example": "ok"})
+    version: str = Field(..., json_schema_extra={"example": "1.0.0"})
     records_loaded: int = Field(..., description="Number of clean records in memory")
 
 
