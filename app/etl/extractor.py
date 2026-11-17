@@ -1,19 +1,20 @@
 """
 app/etl/extractor.py
 =====================
-EXTRACT step — pulls the Credit Card Default dataset from Hugging Face.
+EXTRACT step — pulls the UCI Credit Card Default dataset from Hugging Face.
 
-Dataset  : imodels/credit-card  (HuggingFace Hub)
-Direct URL: https://huggingface.co/datasets/imodels/credit-card/raw/main/train.csv
+Dataset   : scikit-learn/credit-card-clients  (HuggingFace Hub)
+Direct URL: https://huggingface.co/datasets/scikit-learn/credit-card-clients/resolve/main/UCI_Credit_Card.csv
 
-Falls back to a bundled synthetic sample if the remote is unreachable
-(e.g. running fully offline or in a restricted CI environment).
+This mirror keeps the original UCI schema (30,000 rows, 25 columns).
+After download, the columns are checked against EXPECTED_COLS. If the
+remote is unreachable OR its schema doesn't match, the step falls back to
+generated synthetic data with the same schema, and logs exactly why.
 """
 
 from __future__ import annotations
 
 import io
-import os
 import time
 
 import pandas as pd
@@ -33,6 +34,20 @@ EXPECTED_COLS = {
     "PAY_AMT1", "PAY_AMT2", "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6",
     "default.payment.next.month",
 }
+
+
+def _check_schema(df: pd.DataFrame) -> None:
+    """
+    Fail fast if the downloaded file doesn't have the columns the transform
+    step depends on. Without this check, a mirror that renames or one-hot
+    encodes columns (e.g. SEX -> sex:2) would load "successfully" and then
+    silently produce empty labels further down the pipeline.
+    """
+    missing = sorted(EXPECTED_COLS - set(df.columns))
+    if missing:
+        raise DataSourceError(
+            f"Remote schema mismatch — missing {len(missing)} expected column(s): {missing}"
+        )
 
 
 def _fetch_remote(url: str, timeout: int = 15) -> pd.DataFrame:
@@ -89,6 +104,7 @@ def extract() -> pd.DataFrame:
     """
     try:
         df = _fetch_remote(settings.HF_DATASET_URL)
+        _check_schema(df)
         logger.info(f"  Remote extract OK — {len(df):,} rows, {len(df.columns)} columns.")
         return df
     except Exception as exc:

@@ -57,6 +57,8 @@ def get_insights(request: Request) -> InsightsResponse:
     # ── By education ─────────────────────────────────────────────
     edu_order = ["Graduate School", "University", "High School", "Other"]
     edu_rows  = []
+    if "education_label" not in df.columns:      # defensive: never 500 on a schema gap
+        edu_order = []
     for edu in edu_order:
         sub = df[df["education_label"] == edu]
         if sub.empty:
@@ -107,7 +109,7 @@ def get_insights(request: Request) -> InsightsResponse:
 
     young_def = next((r.default_rate_pct for r in age_rows if r.age_group == "<25"), None)
     mid_def   = next((r.default_rate_pct for r in age_rows if r.age_group == "35–44"), None)
-    if young_def and mid_def:
+    if young_def is not None and mid_def is not None:
         findings.append(
             f"Customers under 25 default at {young_def:.1f}% vs "
             f"{mid_def:.1f}% for the 35–44 cohort."

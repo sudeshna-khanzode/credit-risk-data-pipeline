@@ -9,9 +9,9 @@ Transformations applied (in order):
   3.  Null imputation               — median for numeric, mode for categorical
   4.  Outlier capping               — IQR-based for LIMIT_BAL
   5.  Label encoding                — sex, education, marriage → readable strings
-  6.  Derived features              — utilisation_rate, avg_payment_ratio,
-                                      total_bill, total_paid, payment_gap,
-                                      repayment_trend, risk_tier
+  6.  Derived features              — credit_utilisation, avg_payment_ratio,
+                                      total_bill_6m, total_paid_6m, payment_gap,
+                                      repayment_trend, max_late_payments, risk_tier
   7.  Validation                    — post-transform schema check
 """
 
@@ -49,10 +49,9 @@ def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [c.strip().lower().replace(" ", "_").replace(".", "_")
                   for c in df.columns]
     # Target column rename
+    # ("." was already replaced with "_" above, so one spelling covers both.)
     if "default_payment_next_month" in df.columns:
-        df.rename(columns={"default_payment_next_month": "default_flag"}, inplace=True)
-    elif "default.payment.next.month" in df.columns:
-        df.rename(columns={"default.payment.next.month": "default_flag"}, inplace=True)
+        df = df.rename(columns={"default_payment_next_month": "default_flag"})
     return df
 
 

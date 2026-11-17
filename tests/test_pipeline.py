@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from app.etl.transformer import transform, _normalise_columns, _engineer_features
 from app.etl.loader import load
+from app.etl import extractor
 from app.main import create_app
 
 
@@ -120,6 +121,25 @@ class TestTransformer:
 
     def test_record_id_starts_at_1(self, transformed_df):
         assert transformed_df["record_id"].min() == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extractor tests
+# ─────────────────────────────────────────────────────────────────────────────
+class TestExtractor:
+
+    def test_schema_ok_uses_remote_data(self, raw_sample):
+        with patch.object(extractor, "_fetch_remote", return_value=raw_sample):
+            df = extractor.extract()
+        assert len(df) == len(raw_sample), "Valid remote data should be used as-is"
+
+    def test_schema_mismatch_falls_back(self, raw_sample):
+        # Simulate a mirror that one-hot encodes SEX (SEX -> "sex:2")
+        bad = raw_sample.drop(columns=["SEX"]).assign(**{"sex:2": 1})
+        with patch.object(extractor, "_fetch_remote", return_value=bad):
+            df = extractor.extract()
+        assert "SEX" in df.columns, "Schema mismatch should trigger the synthetic fallback"
+        assert len(df) != len(bad)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
